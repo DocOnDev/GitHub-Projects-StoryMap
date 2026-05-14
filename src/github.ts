@@ -4,12 +4,11 @@ import type { GithubIssue, GithubProject, ProjectLocator } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
-type GraphqlResponse = {
+type ProjectResponse = {
   data?: {
     user?: ProjectOwner | null;
     organization?: ProjectOwner | null;
   };
-  errors?: Array<{ message: string }>;
 };
 
 type ProjectOwner = {
@@ -17,11 +16,23 @@ type ProjectOwner = {
     title: string;
     url: string;
     items: {
-      nodes: Array<{
-        content: GithubIssueNode | null;
-      }>;
+      pageInfo: {
+        hasNextPage: boolean;
+        endCursor: string | null;
+      };
+      nodes: ProjectItemNode[];
     };
   } | null;
+};
+
+type ProjectItemNode = {
+  content: GithubIssueNode | null;
+};
+
+type IssueTreeResponse = {
+  data?: {
+    node?: GithubIssueNode | null;
+  };
 };
 
 type GithubIssueNode = {
@@ -35,6 +46,7 @@ type GithubIssueNode = {
   milestone: GithubMilestoneNode | null;
   parent: GithubIssueRefNode | null;
   subIssues?: {
+    totalCount: number;
     nodes: GithubIssueNode[];
   };
 };
@@ -73,31 +85,62 @@ const issueFragment = `
   }
 `;
 
-function projectQuery(ownerKind: ProjectLocator["ownerKind"]) {
+export async function fetchProject(locator: ProjectLocator): Promise<GithubProject> {
+  const rootIssues: GithubIssue[] = [];
+  let projectTitle = "";
+  let projectUrl = "";
+  let cursor: string | null = null;
+
+  do {
+    const response: ProjectResponse = await graphql<ProjectResponse>(projectItemsQuery(locator.ownerKind), {
+      owner: locator.owner,
+      number: locator.number,
+      cursor: cursor ?? "",
+    });
+    const owner: ProjectOwner | null | undefined =
+      locator.ownerKind === "user" ? response.data?.user : response.data?.organization;
+    const project: ProjectOwner["projectV2"] | null | undefined = owner?.projectV2;
+
+    if (!project) {
+      throw new Error(`Could not find Project ${locator.owner}/${locator.number}`);
+    }
+
+    projectTitle = project.title;
+    projectUrl = project.url;
+
+    for (const item of project.items.nodes) {
+      if (item.content?.__typename === "Issue" && !item.content.parent && hasSubIssues(item.content)) {
+        rootIssues.push(await fetchIssueTree(item.content.id));
+      }
+    }
+
+    cursor = project.items.pageInfo.hasNextPage ? project.items.pageInfo.endCursor : null;
+  } while (cursor);
+
+  return {
+    title: projectTitle,
+    url: projectUrl,
+    items: dedupeIssues(rootIssues),
+  };
+}
+
+function projectItemsQuery(ownerKind: ProjectLocator["ownerKind"]) {
   const ownerField = ownerKind === "user" ? "user" : "organization";
 
   return `
-  query StoryMapProject($owner: String!, $number: Int!) {
-    ${ownerField}(login: $owner) {
-      projectV2(number: $number) {
-        title
-        url
-        items(first: 50) {
-          nodes {
-            content {
-              __typename
-              ... on Issue {
-                ${issueFragment}
-                subIssues(first: 40) {
-                  nodes {
-                    ${issueFragment}
-                    subIssues(first: 40) {
-                      nodes {
-                        ${issueFragment}
-                        subIssues(first: 1) { nodes { id } }
-                      }
-                    }
-                  }
+    query StoryMapProjectItems($owner: String!, $number: Int!, $cursor: String) {
+      ${ownerField}(login: $owner) {
+        projectV2(number: $number) {
+          title
+          url
+          items(first: 100, after: $cursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              content {
+                __typename
+                ... on Issue {
+                  ${issueFragment}
+                  subIssues(first: 1) { totalCount nodes { id } }
                 }
               }
             }
@@ -105,34 +148,42 @@ function projectQuery(ownerKind: ProjectLocator["ownerKind"]) {
         }
       }
     }
-  }
-`;
+  `;
 }
 
-export async function fetchProject(locator: ProjectLocator): Promise<GithubProject> {
-  const response = await graphql<GraphqlResponse>(projectQuery(locator.ownerKind), {
-    owner: locator.owner,
-    number: locator.number,
-  });
+async function fetchIssueTree(issueId: string): Promise<GithubIssue> {
+  const response = await graphql<IssueTreeResponse>(
+    `
+      query IssueTree($issueId: ID!) {
+        node(id: $issueId) {
+          __typename
+          ... on Issue {
+            ${issueFragment}
+            subIssues(first: 50) {
+              totalCount
+              nodes {
+                ${issueFragment}
+                subIssues(first: 50) {
+                  totalCount
+                  nodes {
+                    ${issueFragment}
+                    subIssues(first: 1) { totalCount nodes { id } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `,
+    { issueId },
+  );
 
-  const owner = locator.ownerKind === "user" ? response.data?.user : response.data?.organization;
-  const project = owner?.projectV2;
-
-  if (!project) {
-    throw new Error(`Could not find Project ${locator.owner}/${locator.number}`);
+  if (response.data?.node?.__typename !== "Issue") {
+    throw new Error(`Could not fetch issue tree for ${issueId}`);
   }
 
-  return {
-    title: project.title,
-    url: project.url,
-    items: project.items.nodes.flatMap((item) => {
-      if (item.content?.__typename !== "Issue") {
-        return [];
-      }
-
-      return [toIssue(item.content)];
-    }),
-  };
+  return toIssue(response.data.node);
 }
 
 async function graphql<T>(graphqlQuery: string, variables: Record<string, unknown>): Promise<T> {
@@ -172,6 +223,14 @@ function toIssue(node: GithubIssueNode): GithubIssue {
       : null,
     subIssues: node.subIssues?.nodes.filter(isIssueNode).map(toIssue) ?? [],
   };
+}
+
+function hasSubIssues(issue: GithubIssueNode): boolean {
+  return Boolean(issue.subIssues?.totalCount);
+}
+
+function dedupeIssues(issues: GithubIssue[]): GithubIssue[] {
+  return [...new Map(issues.map((issue) => [issue.id, issue])).values()];
 }
 
 function isIssueNode(node: Partial<GithubIssueNode>): node is GithubIssueNode {

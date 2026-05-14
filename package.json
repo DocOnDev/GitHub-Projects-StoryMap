@@ -6,6 +6,7 @@
   "scripts": {
     "build": "tsc",
     "storymap": "tsx src/cli.ts",
+    "seed:example": "tsx src/seedExample.ts",
     "check": "tsc --noEmit"
   },
   "devDependencies": {

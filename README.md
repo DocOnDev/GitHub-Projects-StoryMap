@@ -1,6 +1,6 @@
 # GitHub Projects StoryMap
 
-Visualize a GitHub Project as a user story map using native GitHub data.
+Generate a static HTML story map from a GitHub Project using native GitHub data.
 
 The app treats the GitHub Project as the planning boundary and derives:
 
@@ -12,3 +12,14 @@ The app treats the GitHub Project as the planning boundary and derives:
 - Task and Story order from native sub-issue order.
 
 See [STORYMAP_DESIGN.md](STORYMAP_DESIGN.md) for the working design.
+
+## Usage
+
+The CLI uses your local `gh` authentication.
+
+```sh
+npm install
+npm run storymap -- https://github.com/users/DocOnDev/projects/8 --out out/storymap.html
+```
+
+Open `out/storymap.html` in a browser and share the generated file with the team.

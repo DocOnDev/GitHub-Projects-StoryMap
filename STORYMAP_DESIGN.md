@@ -75,9 +75,14 @@ Fallback ordering for Slices:
 The app should clearly surface Slices without due dates because their sequence is
 ambiguous.
 
-## First Slice: Read-Only Visualization
+## First Slice: CLI Static HTML Visualization
 
-The first implementation slice is a read-only StoryMap viewer.
+The first implementation slice is a read-only CLI that generates a static HTML
+StoryMap.
+
+This is the fastest path to something teams can look at and share. The CLI uses
+local `gh` authentication, so the app does not need to solve hosted OAuth before
+the StoryMap model is proven.
 
 Input:
 
@@ -95,8 +100,15 @@ Behavior:
 6. Render Stories under Tasks, grouped by Slice.
 7. Render Slice rows ordered by Milestone due date.
 8. Link Activity, Task, Story, and Slice elements back to GitHub.
+9. Write a standalone HTML file.
 
 The first slice should not mutate GitHub data.
+
+Example:
+
+```sh
+npm run storymap -- https://github.com/users/DocOnDev/projects/8 --out out/storymap.html
+```
 
 ## Diagnostics
 

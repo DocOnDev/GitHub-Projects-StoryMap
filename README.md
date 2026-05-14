@@ -12,6 +12,8 @@ The app treats the GitHub Project as the planning boundary and derives:
 - Task and Story order from native sub-issue order.
 
 See [STORYMAP_DESIGN.md](STORYMAP_DESIGN.md) for the working design.
+See [docs/team-project-setup.md](docs/team-project-setup.md) for how to set up a
+GitHub Project so the generator can produce a StoryMap.
 
 ## Usage
 

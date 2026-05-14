@@ -252,8 +252,8 @@ function renderSliceRow(
 
   return `
     <div class="slice-label">
-      <a href="${escapeAttribute(slice.milestone.url)}">${escapeHtml(slice.milestone.title)}</a>
-      <span class="slice-date">${slice.milestone.dueOn ? escapeHtml(slice.milestone.dueOn) : "No target release date"}</span>
+      ${slice.url ? `<a href="${escapeAttribute(slice.url)}">${escapeHtml(slice.title)}</a>` : escapeHtml(slice.title)}
+      <span class="slice-date">${slice.source === "project-field" ? "Project Slice" : "Milestone fallback"}</span>
     </div>
     ${cells || '<div class="cell"><span class="empty">No stories</span></div>'}
   `;

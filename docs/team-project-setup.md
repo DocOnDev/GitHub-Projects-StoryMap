@@ -17,8 +17,8 @@ The Project must contain issue hierarchy that matches the StoryMap model:
 ```text
 Activity issue
   Task issue
-    Story issue assigned to a Milestone
-    Story issue assigned to a Milestone
+    Story issue with a Project Slice field value
+    Story issue with a Project Slice field value
 ```
 
 The generator reads this as:
@@ -27,13 +27,13 @@ The generator reads this as:
 | --- | --- |
 | Activity | Project issue with no parent and at least one child Task |
 | Task | Child issue with at least one child Story |
-| Story | Child issue assigned to a Milestone |
-| Slice | Milestone |
-| Slice sequence | Milestone due date |
+| Story | Child issue with a Project `Slice` field value |
+| Slice | Project `Slice` field |
+| Slice sequence | Order of the Project `Slice` field options |
 | Task order | Native sub-issue order under the Activity |
 | Story order | Native sub-issue order under the Task |
 
-No labels, title prefixes, or custom Project fields are required.
+No labels or title prefixes are required.
 
 ## Multi-Repo Setup
 
@@ -54,36 +54,54 @@ For day-to-day team clarity, prefer this convention:
 The generator traverses from Project Activity roots into their child Tasks and
 Stories.
 
-## Milestones as Slices
+## Slices
 
-Stories must be assigned to Milestones.
+Stories must have a Project-level `Slice` field value.
 
-Milestones are repo-scoped in GitHub. In a multi-repo Project, use the same
-Milestone names and due dates across repos when the slice spans multiple repos.
+Milestones are repo-scoped in GitHub, so they are the wrong primary slice model
+for multi-repo StoryMaps. Use Project fields instead, because Project fields are
+scoped to the Project and work across every repo in the Project.
+
+Create these Project fields:
+
+| Field | Type | Purpose |
+| --- | --- | --- |
+| `Slice` | Single select | The release slice a Story belongs to |
 
 Example:
 
 ```text
-Release 1, due 2026-05-21
-Release 2, due 2026-05-28
-Release 3, due 2026-06-04
+Foundation
+Slice 1 - Keystone - data model
+Slice 2 - Inspection templates
+Slice 3 - Inspection flow
+Slice 4 - Task detail follow-ups
+Slice 5 - Telematics on the gear page
+Slice 6 - Nav, filters, saved views
+Slice 7 - Enrichment
 ```
 
-The generator orders slices by Milestone due date. If a Story's Milestone has no
-due date, the generator will warn that the slice sequence is ambiguous.
+The generator orders slices by the order of the `Slice` field options. To change
+slice sequence, reorder the options in the Project field. This changes the
+StoryMap row order without touching the Stories in those slices.
+
+The generator still supports Milestones as a fallback for older or single-repo
+maps, but multi-repo teams should prefer Project fields.
 
 ## Team Setup Checklist
 
 1. Create or choose a GitHub Project V2.
-2. Create Milestones for the intended slices in the relevant repos.
-3. Give every slice Milestone a due date.
+2. Create a Project single-select field named `Slice`.
+3. Add the Slice options in the order they should appear in the StoryMap.
 4. Create top-level Activity issues.
 5. Add Task issues as sub-issues under Activities.
 6. Add Story issues as sub-issues under Tasks.
-7. Assign each Story issue to a Milestone.
-8. Add the Activity issues to the Project.
+7. Add the Activity, Task, and Story issues to the Project if GitHub has not
+   already added them through the sub-issue hierarchy.
+8. Set each Story issue's `Slice` field.
 9. Reorder Tasks and Stories with GitHub's native sub-issue ordering.
-10. Run the generator:
+10. Reorder the `Slice` field options whenever slice sequence changes.
+11. Run the generator:
 
 ```sh
 npm run storymap -- https://github.com/orgs/GearJot/projects/4 --out out/gearjot-storymap.html
@@ -110,15 +128,129 @@ structured as a StoryMap.
 
 The current Project contains useful issues, including multi-repo items, but it
 does not currently expose a complete Activity -> Task -> Story hierarchy where
-Stories are assigned to Milestones.
+Stories are assigned to Project-level Slices.
 
 Example diagnostics from the current Project:
 
 - `Feature: Shareable Links — time-limited share URLs` is not part of a
   recognized Activity -> Task -> Story chain.
-- Several `Share, Phase ...` child issues have no Milestone-backed Stories.
+- Several `Share, Phase ...` child issues have no Slice-backed Stories.
 - No Activities were found.
 
 To make this Project generate a StoryMap, the team needs to decide which
 top-level issues are Activities, put Task issues under them, and put
-Milestone-backed Story issues under those Tasks.
+Slice-backed Story issues under those Tasks.
+
+## GearJot StoryMap Prototype Setup
+
+To prove this without changing GearJot Project 4, create a new org Project:
+
+```text
+GearJot StoryMap Prototype
+```
+
+Create the Project field:
+
+```text
+Slice
+```
+
+Type:
+
+```text
+Single select
+```
+
+Add these options in this order:
+
+```text
+Foundation
+Slice 1 - Keystone - data model
+Slice 2 - Inspection templates
+Slice 3 - Inspection flow
+Slice 4 - Task detail follow-ups
+Slice 5 - Telematics on the gear page
+Slice 6 - Nav, filters, saved views
+Slice 7 - Enrichment
+```
+
+Create Activity issues in `GearJot/gearjot-v2-planning`:
+
+```text
+Get oriented
+Add & connect a piece of gear
+Set up a template
+Create a task
+Run an inspection
+Follow up on a task
+```
+
+Create Task issues under those Activities:
+
+```text
+Get oriented
+  Step 1 - Land in the org
+  Step 2 - Filter gear and switch views
+
+Add & connect a piece of gear
+  Step 3 - Add a new piece of gear
+  Step 4 - Connect telematics
+  Step 5 - Use gear-scoped navigation
+
+Set up a template
+  Step 6 - Build and assign an inspection template
+
+Create a task
+  Step 7 - Create a task with the right details
+
+Run an inspection
+  Step 8 - Start an inspection from a task
+  Step 9 - Answer questions and create follow-up work
+  Step 10 - Review submitted inspection results
+
+Follow up on a task
+  Step 11 - Reassign, update status, and comment
+```
+
+For the lowest-impact prototype, create prototype Story issues in
+`GearJot/gearjot-v2-planning` and link each one to the real backlog issue in the
+body. Once the team is comfortable, replace those with the real issues or add
+the real issues as Story sub-issues directly.
+
+Map the Stories to Slices like this:
+
+| Task | Slice | Stories |
+| --- | --- | --- |
+| Step 1 - Land in the org | Slice 6 - Nav, filters, saved views | G-003, G-034 |
+| Step 1 - Land in the org | Slice 7 - Enrichment | G-002 |
+| Step 2 - Filter gear and switch views | Slice 6 - Nav, filters, saved views | G-004 filter, G-004 saved view, G-005 |
+| Step 3 - Add a new piece of gear | Foundation | G-006 |
+| Step 4 - Connect telematics | Slice 5 - Telematics on the gear page | G-009, G-036 |
+| Step 4 - Connect telematics | Slice 7 - Enrichment | G-007, G-008 |
+| Step 5 - Use gear-scoped navigation | Foundation | G-001 |
+| Step 6 - Build and assign an inspection template | Foundation | G-010 |
+| Step 6 - Build and assign an inspection template | Slice 2 - Inspection templates | G-011, G-012 |
+| Step 7 - Create a task with the right details | Foundation | G-013, G-018, G-020, G-024, G-019 mitigation |
+| Step 7 - Create a task with the right details | Slice 4 - Task detail follow-ups | G-019 full fix |
+| Step 8 - Start an inspection from a task | Slice 3 - Inspection flow | G-014, G-029 |
+| Step 9 - Answer questions and create follow-up work | Slice 1 - Keystone - data model | G-035 |
+| Step 9 - Answer questions and create follow-up work | Slice 3 - Inspection flow | G-015, G-016, G-030, G-033 |
+| Step 10 - Review submitted inspection results | Slice 3 - Inspection flow | G-017 |
+| Step 11 - Reassign, update status, and comment | Foundation | G-021, G-022, G-023 |
+| Step 11 - Reassign, update status, and comment | Slice 4 - Task detail follow-ups | G-031, G-026, G-027, G-037 |
+
+Cleanup notes:
+
+- Split `G-004` into filtering and saved-view Stories if those can ship
+  separately.
+- Split `G-019` into the mitigation and the full file-attachment fix if those
+  can ship separately.
+- Do not map `G-025`; the earlier StoryMap treated it as audit-only.
+- Do not map `G-028`; it is a composite end-to-end gap that closes when its
+  constituents close.
+
+Run the prototype generator with:
+
+```sh
+npm run storymap -- https://github.com/orgs/GearJot/projects/NEW_NUMBER --out out/gearjot-prototype-storymap.html
+```

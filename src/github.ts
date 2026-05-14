@@ -1,6 +1,12 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { GithubIssue, GithubProject, ProjectLocator } from "./types.js";
+import type {
+  GithubIssue,
+  GithubProject,
+  ProjectFieldValues,
+  ProjectLocator,
+  ProjectSliceOption,
+} from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -15,6 +21,9 @@ type ProjectOwner = {
   projectV2: {
     title: string;
     url: string;
+    fields: {
+      nodes: ProjectFieldNode[];
+    };
     items: {
       pageInfo: {
         hasNextPage: boolean;
@@ -27,6 +36,41 @@ type ProjectOwner = {
 
 type ProjectItemNode = {
   content: GithubIssueNode | null;
+  fieldValues: {
+    nodes: ProjectFieldValueNode[];
+  };
+};
+
+type ProjectFieldValueNode =
+  | {
+      __typename: "ProjectV2ItemFieldSingleSelectValue";
+      name: string;
+      field: ProjectFieldNode | null;
+    }
+  | {
+      __typename: "ProjectV2ItemFieldDateValue";
+      date: string;
+      field: ProjectFieldNode | null;
+    }
+  | {
+      __typename: "ProjectV2ItemFieldTextValue";
+      text: string;
+      field: ProjectFieldNode | null;
+    }
+  | {
+      __typename: string;
+      field?: ProjectFieldNode | null;
+    };
+
+type ProjectFieldNode = {
+  __typename?: string;
+  id?: string;
+  name: string;
+  dataType: string;
+  options?: Array<{
+    id: string;
+    name: string;
+  }>;
 };
 
 type IssueTreeResponse = {
@@ -86,7 +130,9 @@ const issueFragment = `
 `;
 
 export async function fetchProject(locator: ProjectLocator): Promise<GithubProject> {
-  const rootIssues: GithubIssue[] = [];
+  const rootIssueIds: string[] = [];
+  const projectFieldsByIssueId = new Map<string, ProjectFieldValues>();
+  let sliceOptions: ProjectSliceOption[] = [];
   let projectTitle = "";
   let projectUrl = "";
   let cursor: string | null = null;
@@ -107,19 +153,31 @@ export async function fetchProject(locator: ProjectLocator): Promise<GithubProje
 
     projectTitle = project.title;
     projectUrl = project.url;
+    sliceOptions = readSliceOptions(project.fields.nodes);
 
     for (const item of project.items.nodes) {
-      if (item.content?.__typename === "Issue" && !item.content.parent && hasSubIssues(item.content)) {
-        rootIssues.push(await fetchIssueTree(item.content.id));
+      if (item.content?.__typename !== "Issue") {
+        continue;
+      }
+
+      projectFieldsByIssueId.set(item.content.id, readProjectFieldValues(item.fieldValues.nodes));
+
+      if (!item.content.parent && hasSubIssues(item.content)) {
+        rootIssueIds.push(item.content.id);
       }
     }
 
     cursor = project.items.pageInfo.hasNextPage ? project.items.pageInfo.endCursor : null;
   } while (cursor);
 
+  const rootIssues = await Promise.all(
+    dedupeIds(rootIssueIds).map((issueId) => fetchIssueTree(issueId, projectFieldsByIssueId)),
+  );
+
   return {
     title: projectTitle,
     url: projectUrl,
+    sliceOptions,
     items: dedupeIssues(rootIssues),
   };
 }
@@ -133,9 +191,38 @@ function projectItemsQuery(ownerKind: ProjectLocator["ownerKind"]) {
         projectV2(number: $number) {
           title
           url
+          fields(first: 50) {
+            nodes {
+              __typename
+              ... on ProjectV2FieldCommon { id name dataType }
+              ... on ProjectV2SingleSelectField {
+                id
+                name
+                dataType
+                options { id name }
+              }
+            }
+          }
           items(first: 100, after: $cursor) {
             pageInfo { hasNextPage endCursor }
             nodes {
+              fieldValues(first: 20) {
+                nodes {
+                  __typename
+                  ... on ProjectV2ItemFieldSingleSelectValue {
+                    name
+                    field { ... on ProjectV2FieldCommon { name dataType } }
+                  }
+                  ... on ProjectV2ItemFieldDateValue {
+                    date
+                    field { ... on ProjectV2FieldCommon { name dataType } }
+                  }
+                  ... on ProjectV2ItemFieldTextValue {
+                    text
+                    field { ... on ProjectV2FieldCommon { name dataType } }
+                  }
+                }
+              }
               content {
                 __typename
                 ... on Issue {
@@ -151,7 +238,10 @@ function projectItemsQuery(ownerKind: ProjectLocator["ownerKind"]) {
   `;
 }
 
-async function fetchIssueTree(issueId: string): Promise<GithubIssue> {
+async function fetchIssueTree(
+  issueId: string,
+  projectFieldsByIssueId: Map<string, ProjectFieldValues>,
+): Promise<GithubIssue> {
   const response = await graphql<IssueTreeResponse>(
     `
       query IssueTree($issueId: ID!) {
@@ -183,7 +273,7 @@ async function fetchIssueTree(issueId: string): Promise<GithubIssue> {
     throw new Error(`Could not fetch issue tree for ${issueId}`);
   }
 
-  return toIssue(response.data.node);
+  return toIssue(response.data.node, projectFieldsByIssueId);
 }
 
 async function graphql<T>(graphqlQuery: string, variables: Record<string, unknown>): Promise<T> {
@@ -203,7 +293,7 @@ async function graphql<T>(graphqlQuery: string, variables: Record<string, unknow
   return parsed;
 }
 
-function toIssue(node: GithubIssueNode): GithubIssue {
+function toIssue(node: GithubIssueNode, projectFieldsByIssueId: Map<string, ProjectFieldValues>): GithubIssue {
   return {
     id: node.id,
     number: node.number,
@@ -212,6 +302,7 @@ function toIssue(node: GithubIssueNode): GithubIssue {
     state: node.state,
     repository: node.repository.nameWithOwner,
     milestone: node.milestone,
+    projectFields: projectFieldsByIssueId.get(node.id) ?? emptyProjectFields(),
     parent: node.parent
       ? {
           id: node.parent.id,
@@ -221,8 +312,67 @@ function toIssue(node: GithubIssueNode): GithubIssue {
           repository: node.parent.repository.nameWithOwner,
         }
       : null,
-    subIssues: node.subIssues?.nodes.filter(isIssueNode).map(toIssue) ?? [],
+    subIssues: node.subIssues?.nodes.filter(isIssueNode).map((subIssue) => toIssue(subIssue, projectFieldsByIssueId)) ?? [],
   };
+}
+
+function readProjectFieldValues(values: ProjectFieldValueNode[]): ProjectFieldValues {
+  const projectFields = emptyProjectFields();
+
+  for (const value of values) {
+    const fieldName = value.field?.name.toLowerCase();
+
+    if (!fieldName) {
+      continue;
+    }
+
+    if (isSingleSelectValue(value) && isSliceField(fieldName)) {
+      projectFields.slice = value.name;
+    }
+
+    if (isTextValue(value) && isSliceField(fieldName)) {
+      projectFields.slice = value.text;
+    }
+
+  }
+
+  return projectFields;
+}
+
+function emptyProjectFields(): ProjectFieldValues {
+  return {
+    slice: null,
+  };
+}
+
+function isSliceField(fieldName: string): boolean {
+  return ["slice", "release"].includes(fieldName);
+}
+
+function isSingleSelectValue(
+  value: ProjectFieldValueNode,
+): value is Extract<ProjectFieldValueNode, { __typename: "ProjectV2ItemFieldSingleSelectValue" }> {
+  return value.__typename === "ProjectV2ItemFieldSingleSelectValue" && "name" in value;
+}
+
+function isTextValue(
+  value: ProjectFieldValueNode,
+): value is Extract<ProjectFieldValueNode, { __typename: "ProjectV2ItemFieldTextValue" }> {
+  return value.__typename === "ProjectV2ItemFieldTextValue" && "text" in value;
+}
+
+function readSliceOptions(fields: ProjectFieldNode[]): ProjectSliceOption[] {
+  const sliceField = fields.find(
+    (field) => field.__typename === "ProjectV2SingleSelectField" && field.name.toLowerCase() === "slice",
+  );
+
+  return (
+    sliceField?.options?.map((option, index) => ({
+      id: option.id,
+      name: option.name,
+      sequence: index,
+    })) ?? []
+  );
 }
 
 function hasSubIssues(issue: GithubIssueNode): boolean {
@@ -231,6 +381,10 @@ function hasSubIssues(issue: GithubIssueNode): boolean {
 
 function dedupeIssues(issues: GithubIssue[]): GithubIssue[] {
   return [...new Map(issues.map((issue) => [issue.id, issue])).values()];
+}
+
+function dedupeIds(ids: string[]): string[] {
+  return [...new Set(ids)];
 }
 
 function isIssueNode(node: Partial<GithubIssueNode>): node is GithubIssueNode {

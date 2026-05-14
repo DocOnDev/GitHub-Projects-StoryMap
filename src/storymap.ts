@@ -2,7 +2,6 @@ import type {
   Activity,
   Diagnostic,
   GithubIssue,
-  GithubMilestone,
   GithubProject,
   Slice,
   StoryMap,
@@ -12,6 +11,7 @@ import type {
 export function buildStoryMap(project: GithubProject): StoryMap {
   const diagnostics: Diagnostic[] = [];
   const slicesByKey = new Map<string, Slice>();
+  const sliceOptionsByName = new Map(project.sliceOptions.map((option) => [option.name, option]));
   const projectIssueIds = new Set(project.items.map((issue) => issue.id));
   const activities: Activity[] = [];
 
@@ -20,7 +20,9 @@ export function buildStoryMap(project: GithubProject): StoryMap {
       continue;
     }
 
-    const tasks = issue.subIssues.flatMap((subIssue) => toTask(subIssue, slicesByKey, diagnostics));
+    const tasks = issue.subIssues.flatMap((subIssue) =>
+      toTask(subIssue, slicesByKey, sliceOptionsByName, diagnostics),
+    );
 
     if (tasks.length > 0) {
       activities.push({ issue, tasks });
@@ -36,7 +38,7 @@ export function buildStoryMap(project: GithubProject): StoryMap {
       });
     }
 
-    if (!isRecognized(project.items, issue)) {
+    if (!isRecognized(project.items, issue, sliceOptionsByName)) {
       diagnostics.push({
         severity: "info",
         message: `${issueLabel(issue)} is not part of a recognized Activity -> Task -> Story chain.`,
@@ -48,11 +50,11 @@ export function buildStoryMap(project: GithubProject): StoryMap {
   const slices = [...slicesByKey.values()].sort(compareSlices);
 
   for (const slice of slices) {
-    if (!slice.milestone.dueOn) {
+    if (slice.sequence === null) {
       diagnostics.push({
         severity: "warning",
-        message: `Slice "${slice.milestone.title}" has no due date, so its sequence is ambiguous.`,
-        url: slice.milestone.url,
+        message: `Slice "${slice.title}" is not in the Project Slice option list, so its sequence is ambiguous.`,
+        url: slice.url,
       });
     }
   }
@@ -60,7 +62,7 @@ export function buildStoryMap(project: GithubProject): StoryMap {
   if (activities.length === 0) {
     diagnostics.push({
       severity: "warning",
-      message: "No Activities found. Add top-level Project issues with child Tasks and Milestone-backed Stories.",
+      message: "No Activities found. Add top-level Project issues with child Tasks and Slice-backed Stories.",
     });
   }
 
@@ -77,14 +79,15 @@ export function buildStoryMap(project: GithubProject): StoryMap {
 function toTask(
   issue: GithubIssue,
   slicesByKey: Map<string, Slice>,
+  sliceOptionsByName: Map<string, { id: string; name: string; sequence: number }>,
   diagnostics: Diagnostic[],
 ): Task[] {
-  const stories = issue.subIssues.flatMap((subIssue) => toStory(subIssue, slicesByKey));
+  const stories = issue.subIssues.flatMap((subIssue) => toStory(subIssue, slicesByKey, sliceOptionsByName));
 
   if (stories.length === 0) {
     diagnostics.push({
       severity: "info",
-      message: `${issueLabel(issue)} is a child issue, but it has no Milestone-backed Stories.`,
+      message: `${issueLabel(issue)} is a child issue, but it has no Slice-backed Stories.`,
       url: issue.url,
     });
     return [];
@@ -93,39 +96,51 @@ function toTask(
   return [{ issue, stories }];
 }
 
-function toStory(issue: GithubIssue, slicesByKey: Map<string, Slice>) {
-  if (!issue.milestone) {
+function toStory(
+  issue: GithubIssue,
+  slicesByKey: Map<string, Slice>,
+  sliceOptionsByName: Map<string, { id: string; name: string; sequence: number }>,
+) {
+  const slice = issueSlice(issue, sliceOptionsByName);
+
+  if (!slice) {
     return [];
   }
 
-  const sliceKey = milestoneKey(issue.milestone);
-
-  if (!slicesByKey.has(sliceKey)) {
-    slicesByKey.set(sliceKey, {
-      key: sliceKey,
-      milestone: issue.milestone,
-    });
+  if (!slicesByKey.has(slice.key)) {
+    slicesByKey.set(slice.key, slice);
+  } else {
+    const existing = slicesByKey.get(slice.key);
+    if (existing && existing.sequence === null && slice.sequence !== null) {
+      existing.sequence = slice.sequence;
+    }
   }
 
-  return [{ issue, sliceKey }];
+  return [{ issue, sliceKey: slice.key }];
 }
 
-function isRecognized(projectIssues: GithubIssue[], issue: GithubIssue): boolean {
+function isRecognized(
+  projectIssues: GithubIssue[],
+  issue: GithubIssue,
+  sliceOptionsByName: Map<string, { id: string; name: string; sequence: number }>,
+): boolean {
   for (const activity of projectIssues) {
     if (activity.parent) {
       continue;
     }
 
     if (activity.id === issue.id) {
-      return activity.subIssues.some((task) => task.subIssues.some((story) => story.milestone));
+      return activity.subIssues.some((task) =>
+        task.subIssues.some((story) => issueSlice(story, sliceOptionsByName)),
+      );
     }
 
     for (const task of activity.subIssues) {
       if (task.id === issue.id) {
-        return task.subIssues.some((story) => story.milestone);
+        return task.subIssues.some((story) => issueSlice(story, sliceOptionsByName));
       }
 
-      if (task.subIssues.some((story) => story.id === issue.id && story.milestone)) {
+      if (task.subIssues.some((story) => story.id === issue.id && issueSlice(story, sliceOptionsByName))) {
         return true;
       }
     }
@@ -135,32 +150,56 @@ function isRecognized(projectIssues: GithubIssue[], issue: GithubIssue): boolean
 }
 
 function compareSlices(left: Slice, right: Slice): number {
-  const leftDate = left.milestone.dueOn ?? "";
-  const rightDate = right.milestone.dueOn ?? "";
+  const leftSequence = left.sequence;
+  const rightSequence = right.sequence;
 
-  if (leftDate && rightDate && leftDate !== rightDate) {
-    return leftDate.localeCompare(rightDate);
+  if (leftSequence !== null && rightSequence !== null && leftSequence !== rightSequence) {
+    return leftSequence - rightSequence;
   }
 
-  if (leftDate && !rightDate) {
+  if (leftSequence !== null && rightSequence === null) {
     return -1;
   }
 
-  if (!leftDate && rightDate) {
+  if (leftSequence === null && rightSequence !== null) {
     return 1;
   }
 
-  const titleComparison = left.milestone.title.localeCompare(right.milestone.title);
+  const titleComparison = left.title.localeCompare(right.title);
 
   if (titleComparison !== 0) {
     return titleComparison;
   }
 
-  return left.milestone.number - right.milestone.number;
+  return left.key.localeCompare(right.key);
 }
 
-function milestoneKey(milestone: GithubMilestone): string {
-  return milestone.id;
+function issueSlice(
+  issue: GithubIssue,
+  sliceOptionsByName: Map<string, { id: string; name: string; sequence: number }>,
+): Slice | null {
+  if (issue.projectFields.slice) {
+    const option = sliceOptionsByName.get(issue.projectFields.slice);
+
+    return {
+      key: `project-field:${issue.projectFields.slice}`,
+      title: issue.projectFields.slice,
+      sequence: option?.sequence ?? null,
+      source: "project-field",
+    };
+  }
+
+  if (issue.milestone) {
+    return {
+      key: `milestone:${issue.milestone.id}`,
+      title: issue.milestone.title,
+      sequence: null,
+      url: issue.milestone.url,
+      source: "milestone",
+    };
+  }
+
+  return null;
 }
 
 function issueLabel(issue: GithubIssue): string {

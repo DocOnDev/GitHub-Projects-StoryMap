@@ -21,8 +21,19 @@ export type GithubIssue = {
   state: string;
   repository: string;
   milestone: GithubMilestone | null;
+  projectFields: ProjectFieldValues;
   parent: GithubIssueRef | null;
   subIssues: GithubIssue[];
+};
+
+export type ProjectFieldValues = {
+  slice: string | null;
+};
+
+export type ProjectSliceOption = {
+  id: string;
+  name: string;
+  sequence: number;
 };
 
 export type GithubIssueRef = {
@@ -36,12 +47,16 @@ export type GithubIssueRef = {
 export type GithubProject = {
   title: string;
   url: string;
+  sliceOptions: ProjectSliceOption[];
   items: GithubIssue[];
 };
 
 export type Slice = {
   key: string;
-  milestone: GithubMilestone;
+  title: string;
+  sequence: number | null;
+  url?: string;
+  source: "project-field" | "milestone";
 };
 
 export type Story = {

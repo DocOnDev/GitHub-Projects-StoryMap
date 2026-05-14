@@ -5,8 +5,7 @@
 This app visualizes a GitHub Project as a user story map.
 
 The source of truth is GitHub. The app should use native GitHub Project, issue,
-sub-issue, and milestone concepts wherever possible. Custom Project fields are an
-escape hatch, not the foundation.
+sub-issue, and Project field concepts wherever possible.
 
 ## Core Model
 
@@ -27,53 +26,53 @@ StoryMap concepts map to GitHub concepts like this:
 | --- | --- |
 | Activity | Project issue with no parent and at least one child Task |
 | Task | Child issue with at least one child Story |
-| Story | Child issue assigned to a Milestone |
-| Slice | GitHub Milestone |
-| Slice sequence | Milestone due date |
+| Story | Child issue with a Project `Slice` field value |
+| Slice | Project single-select field named `Slice` |
+| Slice sequence | Order of the `Slice` field options |
 | Task order | Native sub-issue order under an Activity |
 | Story priority | Native sub-issue order under a Task |
 | Status | Native Project Status field |
 
-No explicit issue labels, title prefixes, or custom fields are required to
-identify Activity, Task, and Story roles.
+No explicit issue labels or title prefixes are required to identify Activity,
+Task, and Story roles.
 
 ## Discovery Rules
 
 Given a Project:
 
 1. Fetch Project items.
-2. For each issue item, fetch its parent issue, sub-issues, milestone, and
-   repository.
+2. For each issue item, fetch its parent issue, sub-issues, Project field
+   values, and repository.
 3. Treat an issue as an Activity when it has no parent and has at least one child
    issue that qualifies as a Task.
 4. Treat an issue as a Task when it is a child issue and has at least one child
-   issue assigned to a Milestone.
-5. Treat an issue as a Story when it is a child issue assigned to a Milestone.
-6. Treat each Milestone referenced by a Story as a Slice.
-7. Order Slices by Milestone due date.
+   issue with a Project `Slice` value.
+5. Treat an issue as a Story when it is a child issue with a Project `Slice`
+   value.
+6. Treat each `Slice` field option referenced by a Story as a Slice.
+7. Order Slices by the order of the Project `Slice` field options.
 8. Order Tasks and Stories by GitHub's native sub-issue order.
 
 ## Slice Sequencing
 
-Slices are ordered by Milestone due date.
+Slices are ordered by the option order of the Project single-select field named
+`Slice`.
 
-Milestone numbers are not suitable as the primary sequence because GitHub assigns
-them in creation order. If a team discovers a new earlier slice after later
-Milestones already exist, the new Milestone number will not reflect the intended
-StoryMap order.
+This lets the team put a Story into a Slice with one dropdown and then sequence
+the Slices independently of the Stories in them by reordering the field options.
 
-Due dates are a native GitHub field and can order slices independently of
-creation order. In the UI, this should be presented as a target release date, not
-as an iteration or batching mechanism.
+Milestones are repo-scoped in GitHub, so they are not suitable as the primary
+slice model for multi-repo Projects. The generator may still use Milestones as a
+fallback for older single-repo maps, but Project fields are the preferred model.
 
-Fallback ordering for Slices:
+Fallback ordering:
 
-1. Milestone due date.
-2. Milestone title.
-3. Milestone number.
+1. Project `Slice` option order.
+2. Slice title.
+3. Milestone fallback title, when no Project `Slice` is set.
 
-The app should clearly surface Slices without due dates because their sequence is
-ambiguous.
+The app should clearly surface Stories without `Slice` values and fallback
+Milestone Slices whose sequence is ambiguous.
 
 ## First Slice: CLI Static HTML Visualization
 
@@ -98,7 +97,7 @@ Behavior:
 4. Build the StoryMap model.
 5. Render Activities and Tasks as the horizontal spine.
 6. Render Stories under Tasks, grouped by Slice.
-7. Render Slice rows ordered by Milestone due date.
+7. Render Slice rows ordered by the Project `Slice` field option order.
 8. Link Activity, Task, Story, and Slice elements back to GitHub.
 9. Write a standalone HTML file.
 
@@ -118,8 +117,8 @@ Useful diagnostics:
 
 - No Activities found.
 - Task issue has no Stories.
-- Story issue has no Milestone.
-- Milestone has no due date.
+- Story issue has no `Slice` value.
+- Slice is not present in the Project `Slice` option list.
 - Story parent is not present in the Project.
 - Task parent is not present in the Project.
 - A Project item is not part of a recognized Activity -> Task -> Story chain.
@@ -133,15 +132,15 @@ Potential interactions:
 
 | User action | GitHub operation |
 | --- | --- |
-| Move Story to another Slice | Update issue milestone |
+| Move Story to another Slice | Update Project `Slice` field value |
 | Reorder Stories under a Task | `reprioritizeSubIssue` |
 | Move Story to another Task | Change sub-issue parent |
 | Reorder Tasks under an Activity | `reprioritizeSubIssue` |
 | Move Task to another Activity | Change sub-issue parent |
-| Create Slice | Create Milestone in the relevant repository |
-| Rename Slice | Update Milestone title |
-| Change Slice sequence | Update Milestone due date |
-| Create Story | Create issue, assign Milestone, add as sub-issue |
+| Create Slice | Add an option to the Project `Slice` field |
+| Rename Slice | Rename the Project `Slice` field option |
+| Change Slice sequence | Reorder the Project `Slice` field options |
+| Create Story | Create issue, add as sub-issue, set Project `Slice` field |
 | Create Task | Create issue, add as sub-issue of Activity |
 | Create Activity | Create top-level issue |
 
@@ -159,10 +158,13 @@ Repo:    https://github.com/DocOnDev/GitHub-Projects-StoryMap
 
 Confirmed GitHub capabilities:
 
-- Project V2 exposes native `Milestone`, `Parent issue`, and
-  `Sub-issues progress` fields.
+- Project V2 exposes native `Parent issue`, `Sub-issues progress`, and custom
+  single-select fields.
 - GraphQL supports `addSubIssue`.
 - GraphQL supports `reprioritizeSubIssue`.
 - GraphQL supports `updateProjectV2ItemPosition`.
+- GraphQL supports `createProjectV2Field`, `updateProjectV2Field`, and
+  `updateProjectV2ItemFieldValue` for assigning Stories to Slices and reordering
+  Slice options.
 - Issue queries return parent issues, sub-issues, native sub-issue order, and
-  Milestone data.
+  Project field values.

@@ -249,8 +249,28 @@ Cleanup notes:
 - Do not map `G-028`; it is a composite end-to-end gap that closes when its
   constituents close.
 
+This prototype has been created at:
+
+```text
+https://github.com/orgs/GearJot/projects/5
+```
+
+The generated local HTML is:
+
+```text
+out/gearjot-prototype-storymap.html
+```
+
+Current result:
+
+```text
+6 Activities
+8 Slices
+0 diagnostics
+```
+
 Run the prototype generator with:
 
 ```sh
-npm run storymap -- https://github.com/orgs/GearJot/projects/NEW_NUMBER --out out/gearjot-prototype-storymap.html
+npm run storymap -- https://github.com/orgs/GearJot/projects/5 --out out/gearjot-prototype-storymap.html
 ```
